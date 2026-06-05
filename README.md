@@ -8,7 +8,7 @@
 ##### notebook1-finetune-pythia (1).ipynb
 ##### Handles the fine-tuning of the base Pythia-160M model on a specific, narrow dataset/task.
 ##### notebook2_train_saes_.py
-##### Trains Sparse Autoencoders (SAEs) on the activations of a chosen layer in the Pythia model. This step is crucial for disentangling the ##### activations into understandable features.
+##### Trains Sparse Autoencoders (SAEs) on the activations of a chosen layer in the Pythia model. This step is crucial for disentangling the activations into understandable features.
 ##### notebook3_feature_comparison_.py
-##### Compares the SAE-extracted features from the base model against the features from the fine-tuned model to measure feature shift, ##### ##### emergence, or collapse.
+##### Compares the SAE-extracted features from the base model against the features from the fine-tuned model to measure feature shift, ##### emergence, or collapse.
 ---
