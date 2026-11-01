@@ -1,0 +1,18 @@
+# Run outputs and caches
+outputs/
+.cache_mechinterp/
+_legacy_local/
+
+# Weights and arrays never belong in git
+*.safetensors
+*.npy
+*.npz
+*.pt
+*.bin
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.ipynb_checkpoints/
+.venv/
