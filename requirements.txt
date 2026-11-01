@@ -1,0 +1,9 @@
+torch>=2.3
+transformers>=4.45
+peft>=0.13
+datasets>=2.19
+safetensors
+numpy
+scipy
+pandas
+matplotlib
