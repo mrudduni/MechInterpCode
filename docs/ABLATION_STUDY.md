@@ -43,7 +43,7 @@ The 0.02 threshold is a judgment call: a practical minimum, not a derived value.
 
 ## Ablation groups
 
-Each cell changes one thing from the reference and is run in this priority order. If time runs out, the core answers already exist.
+Each cell changes one thing from the reference and is run in this priority order. If time runs out, the core answers already exist. On a Kaggle T4, fine-tuning all models took about 5.5 hours and each SAE about 18 minutes, so the full study of 94 SAEs needs about 34 GPU hours across several sessions. The feature analysis behind H3 runs as soon as the reference SAEs exist.
 
 | Group | Cells | What it tells you |
 |---|---|---|
@@ -51,12 +51,12 @@ Each cell changes one thing from the reference and is run in this priority order
 | `design` | same comparison on Wikipedia; base model on Python vs Wikipedia | Is the change limited to Python tokens? How big is a pure data effect? |
 | `control` | LoRA above the hook; LoRA trained on Wikipedia | False-positive calibration; H3 placebo |
 | `dose` | 10% and 30% of updates | H2 |
-| `pipeline` | old design with mismatched data; padding; unit-norm tokens; 200k tokens; no auxiliary loss; all old SAE choices together | How much each original choice distorted results |
-| `architecture` | TopK; ReLU + L1 at 3 strengths | Whether BatchTopK is justified here |
-| `sparsity` | k = 16, 32, 128 | Reconstruction vs sparsity trade-off |
-| `width` | 2048, 12288 features | Whether matching depends on dictionary size |
 | `layer` | layers 2 and 10 | Where in the model the change shows up |
 | `lora` | rank 4, rank 64; lr ÷3, lr ×10/3; full fine-tune | Whether the result is specific to LoRA settings |
+| `sparsity` | k = 16, 32, 128 | Reconstruction vs sparsity trade-off |
+| `architecture` | TopK; ReLU + L1 at 3 strengths | Whether BatchTopK is justified here |
+| `width` | 2048, 12288 features | Whether matching depends on dictionary size |
+| `pipeline` | old design with mismatched data; padding; unit-norm tokens; 200k tokens; no auxiliary loss; all old SAE choices together | How much each original choice distorted results |
 
 Greedy vs Hungarian matching, decoder cosine vs activation correlation, and matched vs same-index frequency shift are computed for every cell, with no extra training.
 

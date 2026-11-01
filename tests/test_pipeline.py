@@ -274,6 +274,37 @@ def test_end_to_end_and_resume(tiny_preset, workspace, monkeypatch):
     rx.run(tiny_preset, "all", groups)
 
 
+def test_resume_lines_only_claim_what_ran(workspace):
+    import pandas as pd
+
+    shared = dict(seed_delta_min=0.04, seed_delta_max=0.06, fvu_b=0.02, l0_b=64.0, ce_recovered_b=0.99)
+    rows = pd.DataFrame([dict(cell="reference", group="reference", delta=0.05, **shared),
+                         dict(cell="control_placebo", group="control", delta=0.03, **shared)])
+    rx.write_resume_lines(rx.PRESETS["main"], rows.iloc[0], rows, pd.DataFrame(), None, "SUPPORTED")
+    text = (rx.Ctx.out / "resume_lines.md").read_text(encoding="utf-8")
+    assert "placebo tuned on Wikipedia shifted +0.030" in text
+    assert "over 2 configurations (placebo and zero-change controls)" in text
+    for not_run in ("architecture", "sparsity", "width"):
+        assert not_run not in text
+
+
+def test_adopts_earlier_run(workspace, tmp_path):
+    src = tmp_path / "input" / "earlier" / "outputs"
+    (src / "saes").mkdir(parents=True)
+    (src / "run_manifest.json").write_text("{}")
+    (src / "saes" / "abc.pt").write_text("x")
+    (src / "feature_summary.json").write_text("{}")
+    assert rx.adopt_previous_outputs(tmp_path / "input") == 1
+    assert (rx.Ctx.out / "saes" / "abc.pt").exists()
+    assert (rx.Ctx.out / "feature_summary.json").exists()
+
+
+def test_require_previous_stops_when_nothing_is_attached(tiny_preset, workspace, monkeypatch):
+    monkeypatch.setattr(rx, "adopt_previous_outputs", lambda: 0)
+    with pytest.raises(RuntimeError, match="require-previous"):
+        rx.run(tiny_preset, "report", require_previous=True)
+
+
 def test_time_budget_stops_cleanly(tiny_preset, workspace, monkeypatch):
     monkeypatch.setattr(rx.Ctx, "deadline", 0.0)
     rx.run(tiny_preset, "all", ["reference"])

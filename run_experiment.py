@@ -309,17 +309,22 @@ def assert_finite_model(model: nn.Module, what: str) -> None:
         assert_finite_tensor(param, f"{what}:{name}")
 
 
-def adopt_previous_outputs() -> None:
-    """Kaggle: copy finished work from an attached earlier run so it is not redone."""
-    root = Path("/kaggle/input")
+def adopt_previous_outputs(root: Path = Path("/kaggle/input")) -> int:
+    """Kaggle: copy finished work from an attached earlier run so it is not redone. Returns SAEs found."""
     if not root.exists():
-        return
+        return 0
+    found = 0
     for manifest in root.rglob("run_manifest.json"):
         src = manifest.parent
         log(f"Adopting earlier results from {src}")
         for sub in ("models", "saes", "cells"):
             if (src / sub).exists():
                 shutil.copytree(src / sub, Ctx.out / sub, dirs_exist_ok=True)
+        for name in ("feature_summary.json", "example_features.md", "features_tuned.csv", "features_base.csv"):
+            if (src / name).exists():
+                shutil.copy2(src / name, Ctx.out / name)
+        found += len(list((src / "saes").glob("*.pt")))
+    return found
 
 
 # ── Text data: repo/article-disjoint splits, compact token storage ───────────
@@ -1437,15 +1442,21 @@ def write_resume_lines(p, ref, rows, models, features, h1) -> None:
         return
     ft = models[models.key == "ft"].iloc[0] if not models.empty and (models.key == "ft").any() else None
     outcome = ("shifted features beyond seed noise" if h1 == "SUPPORTED" else "did not shift features measurably beyond seed noise")
+    topics = {"design": "corpus", "control": "placebo and zero-change controls", "dose": "training dose", "layer": "layer",
+              "lora": "LoRA hyperparameters", "sparsity": "sparsity", "architecture": "architecture", "width": "width",
+              "pipeline": "pipeline choices"}
+    covered = ", ".join(topics[g] for g in GROUP_ORDER if g in topics and (rows.group == g).any())
+    placebo = rows[rows.cell == "control_placebo"]
+    versus = f"; a placebo tuned on Wikipedia shifted {placebo.iloc[0].delta:+.3f}" if len(placebo) else ""
     lines = [
         "**Feature Shift in Sparse Autoencoders under LoRA Fine-Tuning** | [GitHub] | AIMS DTU, 2026",
         f"- Built a reproducible PyTorch pipeline to LoRA fine-tune Pythia-160M on Python code"
         + (f" (held-out perplexity {ft.base_ppl_python:.1f} to {ft.tuned_ppl_python:.1f})" if ft is not None else "")
         + f" and train BatchTopK sparse autoencoders on its layer {p.layer} residual stream.",
-        f"- Measured that LoRA tuning {outcome} (shift {ref.delta:+.3f}, 95% CI [{ref.ci_low:+.3f}, {ref.ci_high:+.3f}]) using "
-        f"same-token, multi-seed comparisons with Hungarian matching; {ref.frac_cos_ge_09:.0%} of features kept a match at cosine >= 0.9.",
-        f"- Ran an ablation study over {len(rows)} configurations (architecture, sparsity, width, layer, LoRA rank, placebo and zero-change "
-        f"controls); reference SAE reached FVU {ref.fvu_b:.3f} at L0 {ref.l0_b:.0f} with {ref.ce_recovered_b:.0%} of CE loss recovered.",
+        f"- Measured that LoRA tuning {outcome} (shift {ref.delta:+.3f}, seed range [{ref.seed_delta_min:+.3f}, {ref.seed_delta_max:+.3f}]) "
+        f"using same-token, multi-seed comparisons of decoder directions{versus}.",
+        f"- Ran an ablation study over {len(rows)} configurations ({covered}); reference SAE reached FVU {ref.fvu_b:.3f} at L0 "
+        f"{ref.l0_b:.0f} with {ref.ce_recovered_b:.0%} of CE loss recovered.",
         "",
         "Tools: PyTorch, Hugging Face Transformers, PEFT, SciPy",
     ]
@@ -1551,7 +1562,7 @@ def make_figures(rows) -> list[str]:
 
 
 # ── Orchestration ────────────────────────────────────────────────────────────
-GROUP_ORDER = ["reference", "design", "control", "dose", "pipeline", "architecture", "sparsity", "width", "layer", "lora"]
+GROUP_ORDER = ["reference", "design", "control", "dose", "layer", "lora", "sparsity", "architecture", "width", "pipeline"]
 
 
 def models_needed(cells: list[Cell]) -> list[str]:
@@ -1577,17 +1588,28 @@ def write_manifest(p: Preset, argv: list[str]) -> None:
     }, indent=2, default=str))
 
 
-def run(p: Preset, stage: str = "all", groups: list[str] | None = None, argv: list[str] | None = None) -> None:
+def run(p: Preset, stage: str = "all", groups: list[str] | None = None, argv: list[str] | None = None,
+        require_previous: bool = False) -> None:
     Ctx.out.mkdir(parents=True, exist_ok=True)
     Ctx.cache.mkdir(parents=True, exist_ok=True)
     write_manifest(p, argv or [])
-    adopt_previous_outputs()
+    adopted = adopt_previous_outputs()
+    if require_previous and not adopted:
+        raise RuntimeError("--require-previous: no earlier SAEs found, so finished work would be redone. Stopping.")
     log(f"Preset {p.name} on {Ctx.device}; outputs {Ctx.out}; scratch {Ctx.cache}")
     study = build_study(p)
     wanted = groups or GROUP_ORDER
     cells = sorted((c for c in study if c.group in wanted), key=lambda c: GROUP_ORDER.index(c.group))
-    features = None
+    ref = study[0]
+    summary_path = Ctx.out / "feature_summary.json"
+    features = json.loads(summary_path.read_text()) if summary_path.exists() else None
     finished = True
+
+    def analyze_when_ready():
+        if features is None and all(sae_path(s).exists() for s in sides(ref)[0] + sides(ref)[1]):
+            return analyze_features(ref, p)
+        return features
+
     try:
         if stage in ("all", "finetune"):
             for key in models_needed(cells):
@@ -1599,14 +1621,10 @@ def run(p: Preset, stage: str = "all", groups: list[str] | None = None, argv: li
                     if name != "base":
                         finetune(name, p)
                 run_cell(cell, p)
-            ref = study[0]
-            if all(sae_path(s).exists() for s in sides(ref)[0] + sides(ref)[1]):
-                features = analyze_features(ref, p)
+                features = analyze_when_ready()  # early, so a session that runs out of time still reports H3
     except OutOfTime as e:
         finished = False
         log(f"Time budget reached before {e}. Saving what is done; attach this output and re-run to continue.")
-    if stage == "report" and (Ctx.out / "feature_summary.json").exists():
-        features = json.loads((Ctx.out / "feature_summary.json").read_text())
     ModelSlot.clear()
     write_report(p, features)
     mem_snapshot("end")
@@ -1629,6 +1647,7 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--out", type=Path, default=out)
     ap.add_argument("--cache", type=Path, default=cache)
     ap.add_argument("--max-hours", type=float, default=11.0, help="stop cleanly before Kaggle's 12h session limit")
+    ap.add_argument("--require-previous", action="store_true", help="stop at once if no attached earlier run is found")
     args, _ = ap.parse_known_args(argv)  # tolerate notebook kernels' extra arguments
     ensure_deps()
     Ctx.out, Ctx.cache, Ctx.deadline = args.out, args.cache, time.time() + args.max_hours * 3600
@@ -1637,7 +1656,7 @@ def main(argv: list[str] | None = None) -> None:
         ap.error(f"unknown groups: {sorted(unknown)}")
     if Ctx.device == "cpu" and args.preset == "main":
         print("WARNING: no GPU found. On Kaggle set Accelerator = GPU T4 x1 or x2.", flush=True)
-    run(PRESETS[args.preset], args.stage, groups, sys.argv if argv is None else argv)
+    run(PRESETS[args.preset], args.stage, groups, sys.argv if argv is None else argv, args.require_previous)
 
 
 if __name__ == "__main__":
